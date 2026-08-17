@@ -1,0 +1,129 @@
+= HiTorro Streams — Kafka
+:toc: left
+:toclevels: 3
+:sectnums:
+:source-highlighter: rouge
+
+Kafka producer sink for `Sink<JsonNode>` pipelines. One class,
+`KafkaSink`, wraps Apache Kafka's `KafkaProducer<String, String>` so
+any streams-based pipeline can land rows in Kafka without adopting a
+larger framework.
+
+Related:
+xref:../../hitorro-streams/docs/README.adoc[Streams / Sinks] ·
+xref:../../hitorro-streams-nats/docs/README.adoc[Streams / NATS] ·
+xref:../../hitorro-mesh-pipelines/docs/pipeline-framework.adoc[Pipelines]
+
+== The class
+
+`com.hitorro.util.core.iterator.sinks.kafka.KafkaSink`
+
+[source,java]
+----
+public KafkaSink(String bootstrap, String topic, String keyExpr)
+----
+
+* `bootstrap` — comma-separated broker list, e.g. `localhost:9092`
+* `topic` — target topic
+* `keyExpr` — dotted path into each row that becomes the Kafka key
+  (e.g. `id`, `user.id`); pass `null` for round-robin partitioning
+
+Uses `LINGER_MS=5` batching by default. `close()` flushes and closes
+the producer cleanly.
+
+== Standalone use
+
+[source,java]
+----
+import com.hitorro.util.core.iterator.sinks.kafka.KafkaSink;
+
+try (var sink = new KafkaSink("localhost:9092", "user-events", "user.id")) {
+    sink.start();
+    for (JsonNode event : incoming) {
+        sink.add(event);
+    }
+    System.out.println("published " + sink.count() + " to Kafka");
+}
+----
+
+Compose with any other sink via `tee()` (from core Sink) — same row
+goes to Kafka AND local NDJson:
+
+[source,java]
+----
+Sink<JsonNode> kafka = new KafkaSink("localhost:9092", "events", "id");
+Sink<JsonNode> audit = new NdjsonFileSink("./audit.ndjson.gz");
+Sink<JsonNode> fanout = kafka.tee(audit);
+fanout.start();
+for (JsonNode e : events) fanout.add(e);
+fanout.close();
+----
+
+== Spring Boot integration
+
+[source,java]
+----
+@Configuration
+public class KafkaSinksConfig {
+
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty("app.kafka.bootstrap")
+    public Sink<JsonNode> eventSink(
+            @Value("${app.kafka.bootstrap}") String bootstrap,
+            @Value("${app.kafka.events-topic}") String topic,
+            @Value("${app.kafka.key-expr:id}") String keyExpr) throws IOException {
+        var sink = new KafkaSink(bootstrap, topic, keyExpr);
+        sink.start();
+        return sink;
+    }
+}
+----
+
+== Mesh pipeline usage (YAML config)
+
+Wire via `hitorro-mesh-pipelines-kafka` (registers `KafkaSink` for
+`kind: kafka` via ServiceLoader):
+
+[source,yaml]
+----
+sinks:
+  - kind: kafka
+    bootstrap: "kafka-broker-1:9092,kafka-broker-2:9092"
+    topic: user-events
+    keyExpr: user.id
+----
+
+== Idempotent writes
+
+Kafka has native idempotent-producer support at the broker level
+(`enable.idempotence=true`). Our `Sink.addIdempotent(taskId, seq, row)`
+default in `KafkaSink` just calls `add()` — for exactly-once semantics
+between HiTorro and Kafka, subclass and pass the `(taskId, seq)` into
+a Kafka producer configured with `transactional.id`:
+
+[source,java]
+----
+public class TransactionalKafkaSink extends KafkaSink {
+    public TransactionalKafkaSink(String bootstrap, String topic, String keyExpr) {
+        super(bootstrap, topic, keyExpr);
+    }
+    @Override
+    public boolean addIdempotent(String taskId, long seq, JsonNode row) throws IOException {
+        // ... beginTransaction / send / commitTransaction keyed by taskId ...
+        return add(row);
+    }
+}
+----
+
+== Consumer side
+
+`hitorro-streams-kafka` also ships a source-side companion —
+`KafkaSourceImpl` — which is the mirror image for pipeline `SourceSpec.Kafka`
+consumption. See the mesh pipeline docs for its YAML shape.
+
+== Where to read more
+
+* Source: `hitorro-streams-kafka/src/main/java/`
+* xref:../../hitorro-streams/docs/README.adoc[Streams / Sinks] — the base `Sink<T>` contract
+* xref:../../hitorro-mesh-pipelines/docs/pipeline-framework.adoc[Pipelines] — YAML config surface
+* Apache Kafka producer https://kafka.apache.org/documentation/#producerconfigs[configs]
