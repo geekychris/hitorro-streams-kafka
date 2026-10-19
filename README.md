@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Hitorro Streams Kafka logo" width="180">
+</p>
+
 # hitorro-streams-kafka
 
 Kafka source (`Iterator<JVS>` / `Iterator<ConsumerRecord>`) and sink
