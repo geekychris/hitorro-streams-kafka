@@ -3,8 +3,10 @@
  */
 package com.hitorro.streams.kafka;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import com.hitorro.util.json.JsonMappers;
+import tools.jackson.core.JacksonException;
 import com.hitorro.util.core.iterator.sinks.Sink;
 import com.hitorro.util.io.StoreException;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -42,7 +44,7 @@ import java.util.function.Function;
  */
 public final class KafkaSink implements Sink<JsonNode> {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = JsonMappers.json();
 
     private final KafkaProducer<String, String> producer;
     private final String topic;
@@ -67,11 +69,23 @@ public final class KafkaSink implements Sink<JsonNode> {
     @Override public boolean add(JsonNode row) throws IOException, StoreException {
         try {
             String key = keyExtractor == null ? null : keyExtractor.apply(row);
-            String value = MAPPER.writeValueAsString(row);
+            String value = encode(row);
             producer.send(new ProducerRecord<>(topic, key, value));
             return true;
         } catch (Exception e) {
             throw new IOException("KafkaSink.add failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Encodes one row as the record value (the wire format: compact JSON text). A row Jackson cannot
+     * write is an {@link IOException}, as it was on Jackson 2.
+     */
+    static String encode(JsonNode row) throws IOException {
+        try {
+            return MAPPER.writeValueAsString(row);
+        } catch (JacksonException e) {
+            throw new IOException(e.getMessage(), e);
         }
     }
 

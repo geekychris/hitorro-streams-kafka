@@ -3,8 +3,11 @@
  */
 package com.hitorro.util.core.iterator.sinks.kafka;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import com.hitorro.util.json.JsonMappers;
+import com.hitorro.util.json.JsonValues;
 import com.hitorro.util.core.iterator.sinks.JsonNodeSinkBase;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -25,7 +28,7 @@ import java.util.Properties;
  */
 public final class KafkaSink extends JsonNodeSinkBase {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ObjectMapper JSON = JsonMappers.json();
 
     private final String bootstrap;
     private final String topic;
@@ -55,7 +58,7 @@ public final class KafkaSink extends JsonNodeSinkBase {
     protected void writeRow(JsonNode row) throws IOException {
         if (producer == null) start();
         String key = keyExpr == null ? null : extract(row, keyExpr);
-        String val = JSON.writeValueAsString(row);
+        String val = encode(row);
         producer.send(new ProducerRecord<>(topic, key, val));
     }
 
@@ -66,12 +69,25 @@ public final class KafkaSink extends JsonNodeSinkBase {
         producer = null;
     }
 
-    private static String extract(JsonNode row, String path) {
+    /**
+     * Encodes one row as the record value (compact JSON text). A row Jackson cannot write is an
+     * {@link IOException}, as it was on Jackson 2 (where {@code JsonProcessingException} was one).
+     */
+    static String encode(JsonNode row) throws IOException {
+        try {
+            return JSON.writeValueAsString(row);
+        } catch (JacksonException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+    }
+
+    /** The record key: the text of the value at a dotted path, or {@code null}. */
+    static String extract(JsonNode row, String path) {
         JsonNode cur = row;
         for (String seg : path.split("\\.")) {
             if (cur == null || cur.isNull()) return null;
             cur = cur.get(seg);
         }
-        return (cur == null || cur.isNull()) ? null : cur.asText();
+        return (cur == null || cur.isNull()) ? null : JsonValues.asText(cur);
     }
 }
