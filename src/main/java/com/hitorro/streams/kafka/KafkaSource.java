@@ -3,8 +3,9 @@
  */
 package com.hitorro.streams.kafka;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import com.hitorro.util.json.JsonMappers;
 import com.hitorro.jsontypesystem.JVS;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -48,7 +49,7 @@ import java.util.Properties;
  */
 public final class KafkaSource implements AutoCloseable {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = JsonMappers.json();
 
     private final KafkaConsumer<String, String> consumer;
     private final Duration pollTimeout;
@@ -101,10 +102,7 @@ public final class KafkaSource implements AutoCloseable {
             @Override public boolean hasNext() {
                 while (next == null && raw.hasNext()) {
                     ConsumerRecord<String, String> r = raw.next();
-                    try {
-                        JsonNode node = MAPPER.readTree(r.value());
-                        next = new JVS(node);
-                    } catch (Exception ignored) { /* skip un-parseable */ }
+                    next = decode(r.value());
                 }
                 return next != null;
             }
@@ -116,6 +114,20 @@ public final class KafkaSource implements AutoCloseable {
     }
 
     /** Unblock any in-flight poll and release the consumer. Idempotent. */
+    /**
+     * Decodes one record value (the wire format: JSON text, parsed with Jackson 2 defaults, so
+     * trailing content after the first value is ignored). Returns {@code null} for a value that
+     * cannot be parsed; {@link #asJvsIterator()} skips those.
+     */
+    static JVS decode(String value) {
+        try {
+            JsonNode node = MAPPER.readTree(value);
+            return new JVS(node);
+        } catch (Exception ignored) {
+            return null; /* skip un-parseable */
+        }
+    }
+
     @Override public void close() {
         if (closed) return;
         closed = true;
